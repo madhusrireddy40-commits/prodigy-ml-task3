@@ -1,0 +1,130 @@
+import os
+import zipfile
+import cv2
+import numpy as np
+from tqdm import tqdm
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from skimage.feature import hog
+import joblib
+
+
+IMG_SIZE = 64
+DATASET_PATH = "dataset/train"
+CATEGORIES = ["cats", "dogs"]
+
+
+def prepare_dataset(zip_path=None, target_path="dataset"):
+    """Ensure the training folders exist. If not, attempt to unzip the
+    Kaggle archive and rearrange images into a simple train/cats & train/dogs
+    layout.
+
+    The original Kaggle file contains a `PetImages` folder with `Cat` and
+    `Dog` subfolders. This function will extract the archive and then move
+    the images to ``target_path/train/cats`` and ``target_path/train/dogs``.
+    """
+    if os.path.isdir(os.path.join(target_path, "train", "cats")):
+        # already prepared
+        return
+
+    if zip_path is None:
+        raise Exception("Dataset not found and no zip_path provided to extract.")
+
+    if not os.path.isfile(zip_path):
+        raise Exception(f"Zip file not found: {zip_path}")
+
+    print(f"Extracting dataset from {zip_path}...")
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        z.extractall(target_path)
+
+   
+    pet_dir = os.path.join(target_path, "PetImages")
+    if not os.path.isdir(pet_dir):
+        raise Exception("Unexpected archive structure; PetImages folder missing.")
+
+    os.makedirs(os.path.join(target_path, "train", "cats"), exist_ok=True)
+    os.makedirs(os.path.join(target_path, "train", "dogs"), exist_ok=True)
+
+    for category in ["Cat", "Dog"]:
+        src = os.path.join(pet_dir, category)
+        dst = os.path.join(target_path, "train", category.lower() + "s")
+        for fname in os.listdir(src):
+            try:
+                os.rename(os.path.join(src, fname), os.path.join(dst, fname))
+            except Exception:
+               
+def load_data(path):
+    features = []
+    labels = []
+
+    for label, category in enumerate(CATEGORIES):
+        folder_path = os.path.join(path, category)
+
+        if not os.path.exists(folder_path):
+            raise Exception(f"Folder not found: {folder_path}")
+
+        for img_name in tqdm(os.listdir(folder_path), desc=f"Loading {category}"):
+            img_path = os.path.join(folder_path, img_name)
+
+            try:
+                img = cv2.imread(img_path)
+                img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+                hog_features = hog(gray,
+                                   orientations=9,
+                                   pixels_per_cell=(8, 8),
+                                   cells_per_block=(2, 2),
+                                   block_norm='L2-Hys')
+
+                features.append(hog_features)
+                labels.append(label)
+
+            except:
+                continue
+
+    return np.array(features), np.array(labels)
+
+ZIP_PATH = r"C:\Users\kunta\Downloads\kagglecatsanddogs_5340.zip"
+
+try:
+    prepare_dataset(ZIP_PATH, target_path="dataset")
+except Exception as e:
+    print(f"Dataset preparation warning: {e}")
+
+print("Loading dataset...")
+X, y = load_data(DATASET_PATH)
+
+print("Dataset loaded successfully!")
+print("Total samples:", len(X))
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+
+print("Training SVM model...")
+
+model = SVC(kernel='rbf')  # You can change to 'linear'
+model.fit(X_train, y_train)
+
+print("Training completed!")
+
+
+y_pred = model.predict(X_test)
+
+accuracy = accuracy_score(y_test, y_pred)
+print("\nAccuracy: {:.2f}%".format(accuracy * 100))
+
+print("\nClassification Report:\n")
+print(classification_report(y_test, y_pred, target_names=["Cat", "Dog"]))
+
+joblib.dump(model, "svm_cat_dog_model.pkl")
+joblib.dump(scaler, "scaler.pkl")
+
+print("\nModel and scaler saved successfully!")
